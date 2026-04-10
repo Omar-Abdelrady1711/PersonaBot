@@ -211,8 +211,11 @@ with st.sidebar:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="sec">💡 Try These (Adversarial)</div>', unsafe_allow_html=True)
     st.caption("Messages designed to pull GPT away from the persona.")
-    for sug in ADVERSARIAL_SUGGESTIONS[:3]:
-        st.caption(f"› {sug[:60]}…")
+    for sug in ADVERSARIAL_SUGGESTIONS:
+        st.markdown(
+            f'<div style="font-size:0.82rem;color:#9fb0cf;line-height:1.5;word-break:break-word;margin:0.2rem 0;">› {sug}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("↺  Reset conversation", use_container_width=True):
