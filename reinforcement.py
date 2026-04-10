@@ -15,7 +15,7 @@ from alignment_scorer import score_alignment
 CORRECTABLE_TRAITS = {"formality", "empathy", "verbosity", "technical_depth", "politeness"}
 
 # Default threshold — if overall alignment drops below this, reinforcement fires
-DEFAULT_THRESHOLD = 0.65
+DEFAULT_THRESHOLD = 0.55
 
 
 # ---------------------------------------------------------------------------
