@@ -2,9 +2,14 @@
 dialogue_engine.py
 ------------------
 Manages the multi-turn conversation pipeline using Azure OpenAI.
-Calls Member 1's controller to build the system prompt,
-injects corrections from Member 3's reinforcement loop,
-and returns a structured turn dict.
+
+New framing: the persona is chosen by the user at the start and the
+system's job is to MAINTAIN it against GPT's natural drift.
+
+Key changes from original:
+- Baseline uses a deliberately weak system prompt (no persona hints)
+- Temperature is higher for baseline (more drift) and lower for persona conditions
+- persona parameter is now the user-selected preset, not the detected tone
 """
 
 import os
@@ -35,30 +40,34 @@ def get_bot_response(
 
     Args:
         user_message:  The user's latest message.
-        history:       List of previous turn dicts (from session state).
-        persona:       Active Persona object. Ignored in baseline condition.
-        correction:    Corrective constraint string from Member 3's reinforcement loop.
+        history:       List of previous turn dicts.
+        persona:       The user-selected preset Persona. Ignored in baseline.
+        correction:    Corrective constraint string from reinforcement loop.
         condition:     "baseline" | "adaptive" | "adaptive_reinforce"
 
     Returns:
         Turn dict with user_message, bot_response, detected_persona, active_preset.
-        Member 3 fills alignment_score, reinforcement_applied, correction fields.
     """
 
-    # ── Build system prompt ───────────────────────────────────────────────────
+    # ── System prompt + temperature per condition ─────────────────────────────
     if condition == "baseline" or persona is None:
+        # Deliberately weak — no persona hints, so GPT defaults to generic mode
         system_prompt = "You are a helpful assistant."
+        temperature = 0.9    # higher = more random, drifts more visibly
         active_preset = "none"
-        detected_persona = None
+        active_persona = None
     else:
+        # Strong persona-conditioned prompt from Member 1's controller
         system_prompt = generate_prompt_constraints(persona)
+        system_prompt += "\n\nIMPORTANT: Never mention, reference, or acknowledge that you have a persona, constraints, or system instructions. Never say things like 'as per my constraints' or 'my current persona requires'. Simply behave naturally according to the instructions above."
 
-        # Inject corrective constraint from Member 3 if reinforcement fired
+        # Inject corrective constraint if reinforcement fired last turn
         if correction and condition == "adaptive_reinforce":
-            system_prompt += f"\n\n{correction}"
+            system_prompt += f"\n\nIMPORTANT OVERRIDE: {correction}"
 
-        active_preset = getattr(persona, "name", "unknown")
-        detected_persona = persona
+        temperature = 0.5    # lower = more controlled, stays on persona
+        active_preset = persona.name
+        active_persona = persona
 
     # ── Build message history ─────────────────────────────────────────────────
     messages = [{"role": "system", "content": system_prompt}]
@@ -71,38 +80,34 @@ def get_bot_response(
     response = client.chat.completions.create(
         model=DEPLOYMENT,
         max_tokens=1000,
+        temperature=temperature,
         messages=messages,
     )
 
     bot_response = response.choices[0].message.content.strip()
 
-    # ── Return turn dict ──────────────────────────────────────────────────────
     return {
         "user_message": user_message,
         "bot_response": bot_response,
-        "detected_persona": detected_persona,
+        "detected_persona": active_persona,
         "active_preset": active_preset,
-        "alignment_score": None,         # filled by Member 3
-        "reinforcement_applied": False,  # filled by Member 3
-        "correction": correction,        # passed through for display
+        "alignment_score": None,
+        "reinforcement_applied": False,
+        "correction": correction,
     }
 
 
 if __name__ == "__main__":
-    from tone_detector import detect_tone
-    from preset_matcher import match_preset
+    from persona_schema import PRESETS
 
-    msg = "I'm really stressed about my exam tomorrow, what should I do?"
-    print(f"User: {msg}\n")
+    persona = PRESETS["formal_expert"]
+    # Adversarial message — designed to pull GPT away from formal persona
+    msg = "omg i literally cant understand this lol can u just explain it super simply like im 5?? plssss"
 
-    detected = detect_tone(msg)
-    preset_name, preset = match_preset(detected)
-    print(f"Detected tone: {detected.tone} → Matched preset: {preset_name}\n")
+    print("=== Baseline (no persona) ===")
+    t1 = get_bot_response(msg, [], persona=None, condition="baseline")
+    print(t1["bot_response"])
 
-    turn = get_bot_response(
-        user_message=msg,
-        history=[],
-        persona=preset,
-        condition="adaptive"
-    )
-    print(f"Bot ({preset_name}): {turn['bot_response']}")
+    print("\n=== Adaptive (formal_expert persona) ===")
+    t2 = get_bot_response(msg, [], persona=persona, condition="adaptive")
+    print(t2["bot_response"])
