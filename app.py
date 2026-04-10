@@ -60,7 +60,7 @@ h3 { font-family:'Syne',sans-serif !important; font-size:1.05rem !important; fon
 .persona-name { font-family:'Syne',sans-serif; font-size:1rem; font-weight:700; color:#4f8ef7; margin-bottom:4px; }
 .persona-desc { font-size:0.82rem; color:#6a7a99; line-height:1.5; }
 [data-testid="stSidebar"] { border-right:1px solid #1c2a40 !important; }
-#MainMenu, footer, header { visibility:hidden; }
+#MainMenu, footer { visibility:hidden; }
 .block-container { padding-top:1.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -220,8 +220,11 @@ with st.sidebar:
     # ── Adversarial suggestions ───────────────────────────────────────────────
     st.markdown('<div class="sec">💡 Try These (Adversarial)</div>', unsafe_allow_html=True)
     st.caption("Messages designed to pull GPT away from the persona — best for showing the difference between conditions.")
-    for sug in ADVERSARIAL_SUGGESTIONS[:3]:
-        st.caption(f"› {sug[:60]}…")
+    for sug in ADVERSARIAL_SUGGESTIONS:
+        st.markdown(
+            f'<div style="font-size:0.82rem;color:#9fb0cf;line-height:1.5;word-break:break-word;margin:0.2rem 0;">› {sug}</div>',
+            unsafe_allow_html=True,
+        )
  
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("↺  Reset conversation", use_container_width=True):

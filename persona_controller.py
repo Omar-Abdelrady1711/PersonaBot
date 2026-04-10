@@ -155,7 +155,7 @@ def generate_prompt_constraints(persona: Persona) -> str:
 def generate_corrective_constraint(trait: str, expected_level: str) -> str:
     """
     Returns a corrective instruction for a single trait that has drifted.
-    Used by Member 3's reinforcement loop to patch the next prompt.
+    Used by reinforcement loop to patch the next prompt.
 
     Args:
         trait:          The trait name (must match Persona field names).
