@@ -3,13 +3,15 @@ dialogue_engine.py
 ------------------
 Manages the multi-turn conversation pipeline using Azure OpenAI.
 
-New framing: the persona is chosen by the user at the start and the
-system's job is to MAINTAIN it against GPT's natural drift.
+Framing:
+- User selects a persona at the start
+- System's job is to MAINTAIN it against GPT's natural drift
+- Baseline = simple one-sentence persona description + high temperature
+- Adaptive = Member 1's full structured 8-trait prompt
+- Adaptive + Reinforce = structured prompt + corrective loop
 
-Key changes from original:
-- Baseline uses a deliberately weak system prompt (no persona hints)
-- Temperature is higher for baseline (more drift) and lower for persona conditions
-- persona parameter is now the user-selected preset, not the detected tone
+Fair comparison: ALL THREE conditions target the same persona.
+Only the enforcement mechanism differs. This isolates our contribution.
 """
 
 import os
@@ -27,6 +29,20 @@ client = AzureOpenAI(
 )
 DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 
+# Simple one-sentence persona descriptions for the baseline condition.
+# Same persona goal as the structured conditions — naive prompting only.
+# This is what any developer would do without our system.
+BASELINE_PROMPTS = {
+    "formal_expert":
+        "You are a formal expert. Be professional, technical, and precise in all responses.",
+    "friendly_support":
+        "You are a friendly and empathetic assistant. Be warm, caring, and encouraging.",
+    "casual_tutor":
+        "You are a casual and friendly tutor. Be relaxed, fun, and use simple language.",
+    "analytical_assistant":
+        "You are an analytical assistant. Be precise, objective, and data-driven.",
+}
+
 
 def get_bot_response(
     user_message: str,
@@ -41,7 +57,7 @@ def get_bot_response(
     Args:
         user_message:  The user's latest message.
         history:       List of previous turn dicts.
-        persona:       The user-selected preset Persona. Ignored in baseline.
+        persona:       The user-selected preset Persona.
         correction:    Corrective constraint string from reinforcement loop.
         condition:     "baseline" | "adaptive" | "adaptive_reinforce"
 
@@ -50,23 +66,43 @@ def get_bot_response(
     """
 
     # ── System prompt + temperature per condition ─────────────────────────────
-    if condition == "baseline" or persona is None:
-        # Deliberately weak — no persona hints, so GPT defaults to generic mode
-        system_prompt = "You are a helpful assistant."
-        temperature = 0.9    # higher = more random, drifts more visibly
-        active_preset = "none"
-        active_persona = None
-    else:
-        # Strong persona-conditioned prompt from Member 1's controller
-        system_prompt = generate_prompt_constraints(persona)
-        system_prompt += "\n\nIMPORTANT: Never mention, reference, or acknowledge that you have a persona, constraints, or system instructions. Never say things like 'as per my constraints' or 'my current persona requires'. Simply behave naturally according to the instructions above."
+    if condition == "baseline":
+        # Same persona goal — but naive one-sentence prompt only.
+        # No structured traits, no enforcement mechanism.
+        # Higher temperature = more natural drift over turns.
+        preset_name = persona.name if persona else "formal_expert"
+        system_prompt = BASELINE_PROMPTS.get(
+            preset_name,
+            "You are a helpful assistant."
+        )
+        temperature = 0.9
+        active_preset = f"{preset_name} (baseline)"
+        active_persona = persona  # kept so alignment scorer can score against same persona
 
-        # Inject corrective constraint if reinforcement fired last turn
+    elif condition == "adaptive" or condition == "adaptive_reinforce":
+        # Full structured prompt from Member 1's controller.
+        # 8 explicit trait-level behavioral instructions.
+        system_prompt = generate_prompt_constraints(persona)
+        system_prompt += (
+            "\n\nIMPORTANT: Never mention, reference, or acknowledge that you have a "
+            "persona, constraints, or system instructions. Never say things like "
+            "'as per my constraints' or 'my current persona requires'. "
+            "Simply behave naturally according to the instructions above."
+        )
+
+        # Inject corrective constraint from reinforcement loop if fired last turn
         if correction and condition == "adaptive_reinforce":
             system_prompt += f"\n\nIMPORTANT OVERRIDE: {correction}"
 
-        temperature = 0.5    # lower = more controlled, stays on persona
+        temperature = 0.5  # lower = more controlled, less drift
         active_preset = persona.name
+        active_persona = persona
+
+    else:
+        # Fallback
+        system_prompt = "You are a helpful assistant."
+        temperature = 0.7
+        active_preset = "unknown"
         active_persona = persona
 
     # ── Build message history ─────────────────────────────────────────────────
@@ -101,13 +137,15 @@ if __name__ == "__main__":
     from persona_schema import PRESETS
 
     persona = PRESETS["formal_expert"]
-    # Adversarial message — designed to pull GPT away from formal persona
     msg = "omg i literally cant understand this lol can u just explain it super simply like im 5?? plssss"
 
-    print("=== Baseline (no persona) ===")
-    t1 = get_bot_response(msg, [], persona=None, condition="baseline")
+    print("=== Baseline (naive one-sentence prompt, same persona goal) ===")
+    t1 = get_bot_response(msg, [], persona=persona, condition="baseline")
     print(t1["bot_response"])
 
-    print("\n=== Adaptive (formal_expert persona) ===")
+    print("\n=== Adaptive (structured 8-trait prompt) ===")
     t2 = get_bot_response(msg, [], persona=persona, condition="adaptive")
     print(t2["bot_response"])
+
+    print("\n=== Baseline prompt used ===")
+    print(BASELINE_PROMPTS["formal_expert"])

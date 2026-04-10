@@ -2,13 +2,13 @@
 alignment_scorer.py
 -------------------
 Measures how well a bot response matches the active persona.
-Uses Claude (Anthropic API) as an independent LLM judge.
+Uses Claude Haiku as an independent LLM judge.
 
 Deliberately uses a different model family from the response generator
-(Azure OpenAI) to avoid self-evaluation bias.
+(Azure OpenAI) to avoid self-evaluation bias — a documented issue in
+LLM evaluation (Ye et al., 2024).
 
 Member 3 deliverable.
-
 Install: pip install anthropic
 """
 
@@ -21,30 +21,45 @@ from persona_schema import Persona
 load_dotenv()
 
 _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-# Haiku is the cheapest model — fast and accurate enough for scoring
 MODEL = "claude-haiku-4-5-20251001"
 
 SCORING_PROMPT = """You are an expert evaluator of conversational style.
 Your task is to measure how well a chatbot response matches a target persona.
 Each persona defines a target level (0.0–1.0) for each trait.
 
-IMPORTANT:
-You are NOT scoring how much of a trait is present.
-You are scoring how CLOSE the response is to the target value.
-This means:
+CORE RULE:
+You are scoring CLOSENESS to the target value — not how much of a trait is present.
 - If the target is LOW and the response is LOW → HIGH score
 - If the target is HIGH and the response is HIGH → HIGH score
 - If they differ significantly → LOW score
 
-Use this rubric:
+CRITICAL RULE — EXTREME TRAITS:
+Traits with extreme target values (below 0.2 or above 0.8) are the most
+important to match. Failing on an extreme trait must result in a low score
+for that trait regardless of how well other traits match.
+
+Specific guidance:
+- empathy target {empathy}: if this is LOW (< 0.3), ANY emotional language,
+  sympathy phrases like "I'm sorry", "I understand how you feel", personal
+  encouragement, or emotional support must score VERY LOW (0.0–0.2) on empathy.
+  A cold, factual response to an emotional message is CORRECT for a low-empathy persona.
+- formality target {formality}: if this is HIGH (> 0.7), casual language,
+  contractions, colloquialisms, or informal phrasing must score VERY LOW on formality.
+- technical_depth target {technical_depth}: if this is HIGH (> 0.7), simple
+  analogies, plain language, or non-technical explanations must score VERY LOW.
+- technical_depth target {technical_depth}: if this is LOW (< 0.3), heavy
+  jargon or domain-specific vocabulary must score VERY LOW.
+- verbosity target {verbosity}: if this is LOW (< 0.3), long detailed responses
+  must score VERY LOW. If HIGH (> 0.7), very short responses must score VERY LOW.
+
+Scoring rubric per trait:
 - 0.9–1.0 → Excellent match (very close to target)
 - 0.7–0.8 → Good match (minor deviation)
-- 0.4–0.6 → Partial match
-- 0.1–0.3 → Poor match
+- 0.4–0.6 → Partial match (noticeable deviation)
+- 0.1–0.3 → Poor match (significant deviation)
 - 0.0     → Opposite of target
 
-Target persona:
+Target persona values:
 - formality:       {formality}
 - empathy:         {empathy}
 - technical_depth: {technical_depth}
@@ -54,10 +69,10 @@ Target persona:
 - politeness:      {politeness}
 - curiosity:       {curiosity}
 
-Response:
+Response to evaluate:
 \"\"\"{response}\"\"\"
 
-Return ONLY valid JSON with these keys. No explanation, no markdown, raw JSON only:
+Return ONLY valid JSON with exactly these keys. No explanation, no markdown, raw JSON only:
 {{
   "formality": float,
   "empathy": float,
@@ -126,52 +141,43 @@ def score_alignment(bot_response: str, persona: Persona) -> dict:
     return scores
 
 
-# ---------------------------------------------------------------------------
-# Quick manual test
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     from persona_schema import PRESETS
 
+    print("=== Testing updated scorer with extreme trait guidance ===\n")
+
     test_cases = [
-        (
-            "formal_expert",
-            "The transformer architecture employs multi-head self-attention mechanisms "
-            "to compute contextual representations. This enables parallelization and "
-            "captures long-range dependencies more efficiently than recurrent models."
-        ),
-        (
-            "friendly_support",
-            "Hey, I totally get how you're feeling — that sounds really overwhelming! "
-            "You're not alone in this. What part is stressing you out the most? "
-            "I'd love to help figure it out together 😊"
-        ),
-        (
-            "casual_tutor",
-            "Okay so basically, gradient descent is just the model 'learning' by "
-            "nudging itself in the direction that makes it less wrong each time. "
-            "Think of it like hiking downhill blindfolded — what part feels fuzzy?"
-        ),
-        (
-            # Mismatched — casual response vs formal persona
-            "formal_expert",
-            "hey so basically transformers just look at all the words at once lol, "
-            "pretty cool right? way better than the old stuff"
-        ),
+        ("analytical_assistant",
+         "I'm so sorry to hear you're frustrated! That's completely normal. "
+         "Let me explain this in a simple way using a real-life example. "
+         "Think of it like memorizing for a test — it's okay to find this hard!",
+         "BAD — warm emotional response vs low-empathy persona"),
+
+        ("analytical_assistant",
+         "Overfitting occurs when a model captures noise in training data, "
+         "resulting in high variance and poor generalization. Regularization "
+         "techniques such as L2 penalty or dropout mitigate this.",
+         "GOOD — technical cold response matches analytical_assistant"),
+
+        ("friendly_support",
+         "I completely understand how overwhelming this feels. You're not alone "
+         "and it's okay to feel this way. What part is hardest for you right now?",
+         "GOOD — warm empathetic response matches friendly_support"),
+
+        ("friendly_support",
+         "Overfitting is a statistical phenomenon characterized by excessive "
+         "model complexity relative to the available training data.",
+         "BAD — cold technical response vs high-empathy persona"),
     ]
 
-    labels = [
-        "formal_expert    (matched)",
-        "friendly_support (matched)",
-        "casual_tutor     (matched)",
-        "formal_expert    (MISMATCHED — casual response)",
-    ]
-
-    for label, (preset_name, response) in zip(labels, test_cases):
+    for preset_name, response, label in test_cases:
         persona = PRESETS[preset_name]
         scores = score_alignment(response, persona)
-        print(f"\n--- {label} ---")
+        print(f"[{label}]")
+        print(f"Persona: {preset_name}")
         print(f"Response: {response[:70]}...")
-        print(f"Overall:  {scores['overall']:.3f}")
-        for t in ["formality", "empathy", "technical_depth", "verbosity",
-                  "assertiveness", "humor", "politeness", "curiosity"]:
-            print(f"  {t:<18} {scores[t]:.3f}")
+        print(f"Overall: {scores['overall']:.3f} | "
+              f"Empathy: {scores['empathy']:.3f} | "
+              f"Formality: {scores['formality']:.3f} | "
+              f"Tech: {scores['technical_depth']:.3f}")
+        print()
